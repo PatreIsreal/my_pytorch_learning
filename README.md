@@ -1,1 +1,2 @@
-# my_pytorch_learning
+my_pytorch_learning
+pytorch的一些基础，已经不学了
