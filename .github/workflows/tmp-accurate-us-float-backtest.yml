@@ -1,0 +1,52 @@
+name: Temporary accurate US float activity backtest
+
+on:
+  push:
+    branches:
+      - tmp/accurate-us-float-audit-20260822
+    paths:
+      - tmp_accurate_backtest/accurate_us_activity_backtest.py
+      - .github/workflows/tmp-accurate-us-float-backtest.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - tmp_accurate_backtest/accurate_us_activity_backtest.py
+      - .github/workflows/tmp-accurate-us-float-backtest.yml
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    if: github.ref == 'refs/heads/tmp/accurate-us-float-audit-20260822' || github.head_ref == 'tmp/accurate-us-float-audit-20260822'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check duckdb pandas numpy requests pyarrow
+      - name: Run audited point-in-time backtest
+        shell: bash
+        run: |
+          set -uo pipefail
+          rm -rf accurate_backtest_output .tmp_accurate_backtest_data
+          mkdir -p accurate_backtest_output
+          status=0
+          python tmp_accurate_backtest/accurate_us_activity_backtest.py \
+            --data-dir .tmp_accurate_backtest_data \
+            --out-dir accurate_backtest_output \
+            > accurate_backtest_output/run.log 2>&1 || status=$?
+          printf '\nworkflow_exit_status=%s\n' "$status" >> accurate_backtest_output/run.log
+          rm -rf .tmp_accurate_backtest_data
+          exit "$status"
+      - name: Upload audited backtest output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accurate-us-float-activity-backtest
+          path: accurate_backtest_output
+          if-no-files-found: warn
+          retention-days: 2
