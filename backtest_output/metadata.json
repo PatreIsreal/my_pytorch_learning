@@ -1,0 +1,41 @@
+{
+  "generated_at_utc": "2026-08-22T06:23:17.537752+00:00",
+  "latest_market_date": "2026-08-21",
+  "entry_window_start_calendar_date": "2026-02-19",
+  "lookback_calendar_days": 183,
+  "big_drop_threshold_pct": -8.0,
+  "activity_rule": "signal-day dollar volume / (signal close * latest available free-float shares)",
+  "entry_rule": "next regular-session open",
+  "exit_rules": [
+    "当日收盘",
+    "次日开盘",
+    "次日收盘"
+  ],
+  "one_way_cost": 0.0025,
+  "tradable_filters": {
+    "min_signal_price_usd": 1.0,
+    "min_signal_dollar_volume_usd": 1000000.0,
+    "min_signal_float_market_cap_usd": 20000000.0
+  },
+  "limitations": [
+    "Free-float shares are latest-snapshot values, not historical point-in-time values.",
+    "The current instrument master introduces survivorship bias and can omit stocks delisted during the window.",
+    "Daily bars do not model opening-auction constraints, halts, bid-ask spread, partial fills, or market impact.",
+    "Net returns assume 25 bps one-way cost; microcap slippage can be materially larger.",
+    "Cohort compounding is diagnostic, not a fully funded equity curve, because next-day positions can overlap."
+  ],
+  "sources": {
+    "info": {
+      "url": "https://huggingface.co/datasets/AlphaDojo/dojo_stock_info/resolve/main/data.parquet?download=true",
+      "size_bytes": 2543067
+    },
+    "quote": {
+      "url": "https://huggingface.co/datasets/AlphaDojo/dojo_quote/resolve/main/data.parquet?download=true",
+      "size_bytes": 39492346
+    },
+    "kline": {
+      "url": "https://huggingface.co/datasets/AlphaDojo/dojo_stock_kline/resolve/main/data.parquet?download=true",
+      "size_bytes": 283821083
+    }
+  }
+}
