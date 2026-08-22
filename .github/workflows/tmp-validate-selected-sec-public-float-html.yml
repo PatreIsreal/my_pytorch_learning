@@ -1,0 +1,44 @@
+name: Temporary validate selected SEC public float HTML
+
+on:
+  push:
+    branches:
+      - tmp/accurate-us-float-audit-20260822
+    paths:
+      - tmp_accurate_backtest/validate_selected_sec_public_float_html.py
+      - .github/workflows/tmp-validate-selected-sec-public-float-html.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check pandas requests beautifulsoup4 lxml
+      - name: Validate selected filings
+        shell: bash
+        run: |
+          set -uo pipefail
+          rm -rf selected_sec_html_validation_output
+          mkdir -p selected_sec_html_validation_output
+          status=0
+          python tmp_accurate_backtest/validate_selected_sec_public_float_html.py \
+            --out-dir selected_sec_html_validation_output \
+            > selected_sec_html_validation_output/run.log 2>&1 || status=$?
+          printf '\nworkflow_exit_status=%s\n' "$status" >> selected_sec_html_validation_output/run.log
+          exit "$status"
+      - name: Upload validation output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selected-sec-public-float-html-validation
+          path: selected_sec_html_validation_output
+          if-no-files-found: warn
+          retention-days: 2
