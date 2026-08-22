@@ -7,12 +7,18 @@ on:
     paths:
       - tmp_accurate_backtest/validate_selected_sec_public_float_html.py
       - .github/workflows/tmp-validate-selected-sec-public-float-html.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - tmp_accurate_backtest/validate_selected_sec_public_float_html.py
+      - .github/workflows/tmp-validate-selected-sec-public-float-html.yml
 
 permissions:
   contents: read
 
 jobs:
   validate:
+    if: github.ref == 'refs/heads/tmp/accurate-us-float-audit-20260822' || github.head_ref == 'tmp/accurate-us-float-audit-20260822'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
