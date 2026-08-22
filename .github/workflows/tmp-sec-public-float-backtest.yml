@@ -1,0 +1,52 @@
+name: Temporary SEC public-float backtest
+
+on:
+  push:
+    branches:
+      - tmp/accurate-us-float-audit-20260822
+    paths:
+      - tmp_accurate_backtest/sec_public_float_backtest.py
+      - .github/workflows/tmp-sec-public-float-backtest.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - tmp_accurate_backtest/sec_public_float_backtest.py
+      - .github/workflows/tmp-sec-public-float-backtest.yml
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    if: github.ref == 'refs/heads/tmp/accurate-us-float-audit-20260822' || github.head_ref == 'tmp/accurate-us-float-audit-20260822'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check duckdb pandas numpy requests pyarrow orjson
+      - name: Run strict SEC point-in-time backtest
+        shell: bash
+        run: |
+          set -uo pipefail
+          rm -rf sec_float_backtest_output .tmp_sec_float_data
+          mkdir -p sec_float_backtest_output
+          status=0
+          python tmp_accurate_backtest/sec_public_float_backtest.py \
+            --data-dir .tmp_sec_float_data \
+            --out-dir sec_float_backtest_output \
+            > sec_float_backtest_output/run.log 2>&1 || status=$?
+          printf '\nworkflow_exit_status=%s\n' "$status" >> sec_float_backtest_output/run.log
+          rm -rf .tmp_sec_float_data
+          exit "$status"
+      - name: Upload strict SEC backtest output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sec-public-float-backtest-results
+          path: sec_float_backtest_output
+          if-no-files-found: warn
+          retention-days: 2
