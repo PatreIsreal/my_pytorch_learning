@@ -1,0 +1,43 @@
+name: Temporary US activity backtest
+
+on:
+  push:
+    branches:
+      - tmp/us-activity-backtest-20260822
+    paths:
+      - tmp_backtest/us_activity_backtest.py
+      - .github/workflows/tmp-us-activity-backtest.yml
+
+permissions:
+  contents: write
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check duckdb pandas numpy requests pyarrow
+      - name: Run and persist results
+        shell: bash
+        run: |
+          set -uo pipefail
+          rm -rf backtest_output .tmp_backtest_data
+          mkdir -p backtest_output
+          status=0
+          python tmp_backtest/us_activity_backtest.py \
+            --data-dir .tmp_backtest_data \
+            --out-dir backtest_output \
+            >backtest_output/run.log 2>&1 || status=$?
+          printf '\nworkflow_exit_status=%s\n' "$status" >> backtest_output/run.log
+          rm -rf .tmp_backtest_data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f backtest_output
+          git commit -m "Store temporary US activity backtest output [skip backtest]" || true
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          exit "$status"
