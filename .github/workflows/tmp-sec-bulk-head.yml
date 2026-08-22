@@ -1,0 +1,39 @@
+name: Temporary inspect SEC bulk archives
+
+on:
+  push:
+    branches:
+      - tmp/accurate-us-float-audit-20260822
+    paths:
+      - .github/workflows/tmp-sec-bulk-head.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/tmp-sec-bulk-head.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    if: github.ref == 'refs/heads/tmp/accurate-us-float-audit-20260822' || github.head_ref == 'tmp/accurate-us-float-audit-20260822'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect SEC archives
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p sec_head_output
+          {
+            echo 'companyfacts headers:'
+            curl -A 'PointInTimeBacktest research@example.com' -sSIL https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip
+            echo 'submissions headers:'
+            curl -A 'PointInTimeBacktest research@example.com' -sSIL https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip
+            echo 'ticker mapping headers:'
+            curl -A 'PointInTimeBacktest research@example.com' -sSIL https://www.sec.gov/files/company_tickers_exchange.json
+          } > sec_head_output/headers.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sec-bulk-head
+          path: sec_head_output
+          retention-days: 1
