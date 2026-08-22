@@ -6,11 +6,13 @@ on:
       - tmp/accurate-us-float-audit-20260822
     paths:
       - tmp_accurate_backtest/sec_public_float_backtest.py
+      - tmp_accurate_backtest/sec_public_float_backtest_runner.py
       - .github/workflows/tmp-sec-public-float-backtest.yml
   pull_request:
     branches: [main]
     paths:
       - tmp_accurate_backtest/sec_public_float_backtest.py
+      - tmp_accurate_backtest/sec_public_float_backtest_runner.py
       - .github/workflows/tmp-sec-public-float-backtest.yml
 
 permissions:
@@ -35,7 +37,7 @@ jobs:
           rm -rf sec_float_backtest_output .tmp_sec_float_data
           mkdir -p sec_float_backtest_output
           status=0
-          python tmp_accurate_backtest/sec_public_float_backtest.py \
+          python tmp_accurate_backtest/sec_public_float_backtest_runner.py \
             --data-dir .tmp_sec_float_data \
             --out-dir sec_float_backtest_output \
             > sec_float_backtest_output/run.log 2>&1 || status=$?
