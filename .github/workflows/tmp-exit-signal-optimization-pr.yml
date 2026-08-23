@@ -49,6 +49,10 @@ jobs:
               'for col in ["entry_open", "entry_close", "next_open", "next_close", "drop_pct"]:',
               'for col in ["entry_open", "entry_close", "drop_pct"]:',
           )
+          script = script.replace(
+              '        details.insert(0, "rule_code", code)\n',
+              '',
+          )
           script_path.write_text(script, encoding='utf-8')
           PY
           python -m py_compile optimize_exit_signals.py
