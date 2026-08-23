@@ -74,18 +74,18 @@ def main():
       WITH p AS (
         SELECT UPPER(REPLACE(CAST(symbol AS VARCHAR),'.','-')) symbol,
                TRY_CAST(bar_time AS DATE) trade_date,
-               TRY_CAST(open AS DOUBLE) open, TRY_CAST(high AS DOUBLE) high,
-               TRY_CAST(low AS DOUBLE) low, TRY_CAST(close AS DOUBLE) close,
+               TRY_CAST(open AS DOUBLE) AS open_px, TRY_CAST(high AS DOUBLE) AS high_px,
+               TRY_CAST(low AS DOUBLE) AS low_px, TRY_CAST(close AS DOUBLE) AS close_px,
                ROW_NUMBER() OVER(PARTITION BY UPPER(REPLACE(CAST(symbol AS VARCHAR),'.','-')),TRY_CAST(bar_time AS DATE) ORDER BY TRY_CAST(bar_time AS TIMESTAMP) DESC NULLS LAST) rn
         FROM read_parquet('{str(kline).replace("'","''")}')
         WHERE UPPER(COALESCE(CAST(kline_t AS VARCHAR),'1D'))='1D'
           AND UPPER(REPLACE(CAST(symbol AS VARCHAR),'.','-')) IN ({quoted})
           AND TRY_CAST(bar_time AS DATE) BETWEEN ? AND ?
-      ) SELECT symbol,trade_date,open,high,low,close FROM p WHERE rn=1
+      ) SELECT symbol,trade_date,open_px,high_px,low_px,close_px FROM p WHERE rn=1
     """
     df=con.execute(q,[min_date,max_date]).df(); df.trade_date=pd.to_datetime(df.trade_date).dt.date
     cal=sorted(df[df.symbol=='AAPL'].trade_date.unique().tolist())
-    bars={(r.symbol,r.trade_date):(float(r.open),float(r.high),float(r.low),float(r.close)) for r in df.itertuples(index=False)}
+    bars={(r.symbol,r.trade_date):(float(r.open_px),float(r.high_px),float(r.low_px),float(r.close_px)) for r in df.itertuples(index=False)}
     results=[]
     for r in inp.itertuples(index=False):
         sim=simulate(r,bars,cal)
