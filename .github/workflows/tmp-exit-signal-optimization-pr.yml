@@ -1,0 +1,69 @@
+name: Temporary exit signal optimization PR
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/tmp-exit-signal-optimization.yml
+      - .github/workflows/tmp-exit-signal-optimization-pr.yml
+
+permissions:
+  contents: read
+
+jobs:
+  optimize:
+    if: github.head_ref == 'tmp/accurate-us-float-audit-20260822'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check duckdb pandas numpy requests pyarrow
+      - name: Decode optimizer payloads from temporary workflow
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64
+          import gzip
+          import re
+          from pathlib import Path
+
+          text = Path('.github/workflows/tmp-exit-signal-optimization.yml').read_text(encoding='utf-8')
+          targets = {
+              'SCRIPT_B64': 'optimize_exit_signals.py',
+              'TRADES_B64': 'exit_opt_input_trades.csv',
+          }
+          for name, destination in targets.items():
+              match = re.search(rf'^      {name}: \|\n((?:          .*\n)+)', text, flags=re.MULTILINE)
+              if not match:
+                  raise RuntimeError(f'payload not found: {name}')
+              payload = ''.join(line.strip() for line in match.group(1).splitlines())
+              Path(destination).write_bytes(gzip.decompress(base64.b64decode(payload)))
+          PY
+          python -m py_compile optimize_exit_signals.py
+      - name: Run bounded exit optimization
+        shell: bash
+        run: |
+          set -uo pipefail
+          rm -rf exit_optimization_output .tmp_exit_opt_data
+          mkdir -p exit_optimization_output
+          status=0
+          python optimize_exit_signals.py \
+            --input-trades exit_opt_input_trades.csv \
+            --data-dir .tmp_exit_opt_data \
+            --out-dir exit_optimization_output \
+            > exit_optimization_output/run.log 2>&1 || status=$?
+          printf '\nworkflow_exit_status=%s\n' "$status" >> exit_optimization_output/run.log
+          rm -rf .tmp_exit_opt_data
+          exit "$status"
+      - name: Upload exit optimization output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exit-signal-optimization-results
+          path: exit_optimization_output
+          if-no-files-found: warn
+          retention-days: 2
