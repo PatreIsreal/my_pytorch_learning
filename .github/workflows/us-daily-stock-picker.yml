@@ -181,18 +181,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          issues_json="$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 100 --json number,title)"
-          issue_number="$(python - "$ISSUE_TITLE" <<'PY'
+          export ISSUES_JSON
+          ISSUES_JSON="$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 100 --json number,title)"
+          issue_number="$(python - <<'PY'
           import json
-          import sys
-          title = sys.argv[1]
-          items = json.load(sys.stdin)
+          import os
+          title = os.environ["ISSUE_TITLE"]
+          items = json.loads(os.environ["ISSUES_JSON"])
           for item in items:
               if item.get("title") == title:
                   print(item["number"])
                   break
           PY
-          <<<"$issues_json")"
+          )"
 
           if [[ -n "$issue_number" ]]; then
             gh issue edit "$issue_number" \
