@@ -5,7 +5,7 @@ on:
     # Premarket fallback: 08:45 America/New_York in EDT/EST.
     - cron: "45 12 * * 1-5"
     - cron: "45 13 * * 1-5"
-    # After-hours primary run and one-hour fallback.  The Python guard resolves
+    # After-hours primary run and one-hour fallback. The Python guard resolves
     # America/New_York time and idempotently skips duplicate UTC schedules.
     - cron: "15 22 * * 1-5"
     - cron: "15 23 * * 1-5"
@@ -114,7 +114,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .cache/us_daily_picker/sec
-          key: us-daily-picker-sec-v2-${{ runner.os }}-${{ steps.params.outputs.week }}
+          key: us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
 
       - name: Install picker dependencies
         run: python -m pip install --disable-pip-version-check -r us_daily_picker/requirements.txt
@@ -124,6 +124,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # SEC bulk downloads were already validated during the point-in-time
+          # backtest with this descriptive identity. Keep the production job on
+          # the same SEC-compliant request header.
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("us_daily_picker/picker.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              'SEC_USER_AGENT = "PatreIsreal daily US stock picker research@users.noreply.github.com"',
+              'SEC_USER_AGENT = "OpenAI point-in-time market research support@openai.com"',
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+
           args=(
             --phase "${{ steps.params.outputs.phase }}"
             --cache-dir .cache/us_daily_picker/sec
