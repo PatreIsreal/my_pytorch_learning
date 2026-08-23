@@ -124,9 +124,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # SEC bulk downloads were already validated during the point-in-time
-          # backtest with this descriptive identity. Keep the production job on
-          # the same SEC-compliant request header.
+          # Keep the live job aligned with the request identity and DuckDB
+          # expression already validated by the audited point-in-time backtest.
           python - <<'PY'
           from pathlib import Path
           path = Path("us_daily_picker/picker.py")
@@ -134,6 +133,10 @@ jobs:
           text = text.replace(
               'SEC_USER_AGENT = "PatreIsreal daily US stock picker research@users.noreply.github.com"',
               'SEC_USER_AGENT = "OpenAI point-in-time market research support@openai.com"',
+          )
+          text = text.replace(
+              "facts.measurement_date - INTERVAL ? DAY",
+              "facts.measurement_date - CAST(? AS INTEGER)",
           )
           path.write_text(text, encoding="utf-8")
           PY
