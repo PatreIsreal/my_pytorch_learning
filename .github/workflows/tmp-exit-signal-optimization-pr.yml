@@ -42,6 +42,14 @@ jobs:
                   raise RuntimeError(f'payload not found: {name}')
               payload = ''.join(line.strip() for line in match.group(1).splitlines())
               Path(destination).write_bytes(gzip.decompress(base64.b64decode(payload)))
+
+          script_path = Path('optimize_exit_signals.py')
+          script = script_path.read_text(encoding='utf-8')
+          script = script.replace(
+              'for col in ["entry_open", "entry_close", "next_open", "next_close", "drop_pct"]:',
+              'for col in ["entry_open", "entry_close", "drop_pct"]:',
+          )
+          script_path.write_text(script, encoding='utf-8')
           PY
           python -m py_compile optimize_exit_signals.py
       - name: Run bounded exit optimization
