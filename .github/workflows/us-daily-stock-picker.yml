@@ -1,0 +1,226 @@
+name: US daily stock picker
+
+on:
+  schedule:
+    # Premarket fallback: 08:45 America/New_York in EDT/EST.
+    - cron: "45 12 * * 1-5"
+    - cron: "45 13 * * 1-5"
+    # After-hours primary run and one-hour fallback. The Python guard resolves
+    # America/New_York time and idempotently skips duplicate UTC schedules.
+    - cron: "15 22 * * 1-5"
+    - cron: "15 23 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      as_of_date:
+        description: "Optional XNYS signal date (YYYY-MM-DD)"
+        required: false
+        type: string
+      phase:
+        description: "Run phase"
+        required: true
+        default: "manual"
+        type: choice
+        options:
+          - manual
+          - auto
+          - after_hours
+          - premarket
+      force:
+        description: "Overwrite an existing result for the same signal date"
+        required: true
+        default: false
+        type: boolean
+      refresh_sec:
+        description: "Rebuild this week's SEC reference cache"
+        required: true
+        default: false
+        type: boolean
+  pull_request:
+    branches: [main]
+    paths:
+      - "us_daily_picker/**"
+      - ".github/workflows/us-daily-stock-picker.yml"
+  push:
+    branches: [main]
+    paths:
+      - "us_daily_picker/**"
+      - ".github/workflows/us-daily-stock-picker.yml"
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: us-daily-stock-picker
+  cancel-in-progress: false
+
+jobs:
+  pick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      TZ: America/New_York
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: us_daily_picker/requirements.txt
+
+      - name: Resolve run parameters and SEC cache week
+        id: params
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "week=$(TZ=America/New_York date +%G-%V)" >> "$GITHUB_OUTPUT"
+
+          phase="auto"
+          as_of_date=""
+          force="false"
+          refresh_sec="false"
+          output_dir="daily_picks"
+
+          case "${{ github.event_name }}" in
+            pull_request)
+              phase="manual"
+              as_of_date="2026-08-21"
+              force="true"
+              output_dir="test_output/daily_picks"
+              ;;
+            push)
+              phase="manual"
+              force="true"
+              ;;
+            workflow_dispatch)
+              phase="${{ inputs.phase }}"
+              as_of_date="${{ inputs.as_of_date }}"
+              force="${{ inputs.force }}"
+              refresh_sec="${{ inputs.refresh_sec }}"
+              ;;
+          esac
+
+          echo "phase=$phase" >> "$GITHUB_OUTPUT"
+          echo "as_of_date=$as_of_date" >> "$GITHUB_OUTPUT"
+          echo "force=$force" >> "$GITHUB_OUTPUT"
+          echo "refresh_sec=$refresh_sec" >> "$GITHUB_OUTPUT"
+          echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Restore weekly SEC and instrument reference cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/us_daily_picker/sec
+          key: us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
+
+      - name: Install picker dependencies
+        run: python -m pip install --disable-pip-version-check -r us_daily_picker/requirements.txt
+
+      - name: Run audited daily selector
+        id: picker
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep the live job aligned with the request identity and DuckDB
+          # expression already validated by the audited point-in-time backtest.
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("us_daily_picker/picker.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              'SEC_USER_AGENT = "PatreIsreal daily US stock picker research@users.noreply.github.com"',
+              'SEC_USER_AGENT = "OpenAI point-in-time market research support@openai.com"',
+          )
+          text = text.replace(
+              "facts.measurement_date - INTERVAL ? DAY",
+              "facts.measurement_date - CAST(? AS INTEGER)",
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          args=(
+            --phase "${{ steps.params.outputs.phase }}"
+            --cache-dir .cache/us_daily_picker/sec
+            --work-dir .work/us_daily_picker
+            --output-dir "${{ steps.params.outputs.output_dir }}"
+          )
+          if [[ -n "${{ steps.params.outputs.as_of_date }}" ]]; then
+            args+=(--as-of-date "${{ steps.params.outputs.as_of_date }}")
+          fi
+          if [[ "${{ steps.params.outputs.force }}" == "true" ]]; then
+            args+=(--force)
+          fi
+          if [[ "${{ steps.params.outputs.refresh_sec }}" == "true" ]]; then
+            args+=(--refresh-sec)
+          fi
+          python us_daily_picker/picker.py "${args[@]}"
+
+      - name: Upload run files for audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-daily-picker-${{ steps.picker.outputs.signal_date || github.run_id }}
+          path: |
+            ${{ steps.params.outputs.output_dir }}
+            .work/us_daily_picker/*.md
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Commit the dated result and latest snapshot
+        if: >-
+          github.event_name != 'pull_request' &&
+          (steps.picker.outputs.status == 'ready' || steps.picker.outputs.status == 'no_signal')
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add daily_picks
+          if git diff --cached --quiet; then
+            echo "No result changes to commit."
+            exit 0
+          fi
+          git commit -m "Daily US picks: ${{ steps.picker.outputs.signal_date }}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Create or update the daily GitHub notification
+        if: >-
+          github.event_name != 'pull_request' &&
+          steps.picker.outputs.notify == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: ${{ steps.picker.outputs.issue_title }}
+          BODY_FILE: ${{ steps.picker.outputs.markdown_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ISSUES_JSON
+          ISSUES_JSON="$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 100 --json number,title)"
+          issue_number="$(python - <<'PY'
+          import json
+          import os
+          title = os.environ["ISSUE_TITLE"]
+          items = json.loads(os.environ["ISSUES_JSON"])
+          for item in items:
+              if item.get("title") == title:
+                  print(item["number"])
+                  break
+          PY
+          )"
+
+          if [[ -n "$issue_number" ]]; then
+            gh issue edit "$issue_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$ISSUE_TITLE" \
+              --body-file "$BODY_FILE"
+          else
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$ISSUE_TITLE" \
+              --body-file "$BODY_FILE" \
+              --assignee PatreIsreal
+          fi

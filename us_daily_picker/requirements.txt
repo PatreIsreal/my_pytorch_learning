@@ -1,0 +1,7 @@
+duckdb==1.4.0
+exchange-calendars==4.11.1
+orjson==3.11.3
+pandas==2.3.2
+pyarrow==21.0.0
+requests==2.32.5
+urllib3==2.5.0
