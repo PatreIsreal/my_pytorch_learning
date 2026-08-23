@@ -1,0 +1,54 @@
+name: Temporary best strategy raw OHLC recheck
+
+on:
+  push:
+    branches:
+      - tmp/best-strategy-raw-ohlc-recheck-20260823
+    paths:
+      - tmp_recheck/recheck_exit_ohlc.py
+      - tmp_recheck/actual_39_legs.csv
+      - .github/workflows/tmp-best-strategy-raw-ohlc-recheck.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - tmp_recheck/recheck_exit_ohlc.py
+      - tmp_recheck/actual_39_legs.csv
+      - .github/workflows/tmp-best-strategy-raw-ohlc-recheck.yml
+
+permissions:
+  contents: read
+
+jobs:
+  recheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check duckdb pandas requests pyarrow
+      - name: Re-simulate all 39 exits from raw daily OHLC
+        shell: bash
+        run: |
+          set -uo pipefail
+          rm -rf recheck_output .tmp_recheck_data
+          mkdir -p recheck_output
+          status=0
+          python tmp_recheck/recheck_exit_ohlc.py \
+            --input tmp_recheck/actual_39_legs.csv \
+            --data-dir .tmp_recheck_data \
+            --out-dir recheck_output \
+            > recheck_output/run.log 2>&1 || status=$?
+          printf '\nworkflow_exit_status=%s\n' "$status" >> recheck_output/run.log
+          rm -rf .tmp_recheck_data
+          exit "$status"
+      - name: Upload raw OHLC audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: best-strategy-raw-ohlc-recheck
+          path: recheck_output
+          if-no-files-found: error
+          retention-days: 2
