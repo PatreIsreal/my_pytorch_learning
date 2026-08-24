@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 45
     env:
       PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
       VENV_DIR: .venv/us_intraday_picker
     steps:
       - uses: actions/checkout@v5
