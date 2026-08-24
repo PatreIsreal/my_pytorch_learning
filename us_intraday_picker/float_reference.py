@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Correct point-in-time SEC public-float share inference for intraday ranking.
+"""Point-in-time SEC public-float share inference for intraday ranking.
 
-AlphaDojo's OHLC fields are on the traded-price scale for each session. The
-``adj_factor_cum`` field is metadata and must not be divided into the close when
-recovering the market price used by an SEC public-float disclosure. Doing so can
-inflate historical prices (and shrink inferred float shares) by split factors.
+The market-wide daily file can contain split-adjusted OHLC for some historical
+sessions while ``amount / volume`` remains on the actual traded-price scale.
+For SEC ``EntityPublicFloat`` (a dollar value measured on a historical date), we
+therefore choose the measurement price defensively:
 
-This module therefore:
+* use the reported close when it is on the same scale as the session's average
+  traded price (within a 0.67x–1.50x band); otherwise
+* use ``amount / volume`` as the raw-price proxy.
 
-* uses the daily ``close`` directly as the measurement-date market price;
-* adjusts inferred shares only by the product of explicit ``splits`` events
-  between the SEC measurement date and the latest completed session; and
-* keeps the same strict filing-date and maximum-age rules as the audited model.
+Inferred shares are subsequently adjusted only by explicit stock-split events.
+This avoids both directions of the earlier error: dividing an already raw close
+by an adjustment factor, or treating a later split-adjusted close as raw.
 """
 from __future__ import annotations
 
@@ -55,7 +56,7 @@ def build_float_reference(
             SELECT
                 UPPER(REPLACE(CAST(symbol AS VARCHAR), '.', '-')) AS symbol,
                 TRY_CAST(bar_time AS DATE) AS trade_date,
-                TRY_CAST(close AS DOUBLE) AS raw_close,
+                TRY_CAST(close AS DOUBLE) AS reported_close,
                 TRY_CAST(vol AS DOUBLE) AS volume,
                 TRY_CAST(amount AS DOUBLE) AS amount,
                 CASE
@@ -76,7 +77,7 @@ def build_float_reference(
             SELECT * EXCLUDE (row_rank)
             FROM prepared
             WHERE row_rank = 1
-              AND raw_close > 0
+              AND reported_close > 0
         )
         SELECT
             *,
@@ -99,15 +100,31 @@ def build_float_reference(
     connection.execute(
         """
         CREATE TEMP TABLE priced_facts AS
-        SELECT * EXCLUDE (price_rank)
-        FROM (
+        WITH matched AS (
             SELECT
                 facts.*,
                 bars.trade_date AS measurement_price_date,
-                bars.raw_close AS measurement_raw_close,
+                bars.reported_close AS measurement_reported_close,
                 bars.average_trade_price AS measurement_average_price,
                 bars.cumulative_split_factor AS measurement_split_factor,
-                facts.public_float_value_usd / bars.raw_close AS measurement_float_shares,
+                CASE
+                    WHEN bars.average_trade_price > 0
+                     AND bars.reported_close / bars.average_trade_price
+                         BETWEEN 0.67 AND 1.50
+                    THEN bars.reported_close
+                    WHEN bars.average_trade_price > 0
+                    THEN bars.average_trade_price
+                    ELSE bars.reported_close
+                END AS measurement_price_used,
+                CASE
+                    WHEN bars.average_trade_price > 0
+                     AND bars.reported_close / bars.average_trade_price
+                         BETWEEN 0.67 AND 1.50
+                    THEN 'reported_close'
+                    WHEN bars.average_trade_price > 0
+                    THEN 'amount/volume_raw_proxy'
+                    ELSE 'reported_close_fallback'
+                END AS measurement_price_source,
                 ROW_NUMBER() OVER (
                     PARTITION BY facts.ticker, facts.measurement_date,
                                  facts.filed_date, facts.accession
@@ -118,10 +135,16 @@ def build_float_reference(
                 ON bars.symbol = facts.ticker
                AND bars.trade_date <= facts.measurement_date
                AND bars.trade_date >= facts.measurement_date - CAST(? AS INTEGER)
-               AND bars.raw_close > 0
+               AND bars.reported_close > 0
         )
+        SELECT
+            * EXCLUDE (price_rank),
+            public_float_value_usd / measurement_price_used
+                AS measurement_float_shares
+        FROM matched
         WHERE price_rank = 1
-          AND measurement_float_shares > 0
+          AND measurement_price_used > 0
+          AND public_float_value_usd / measurement_price_used > 0
         """,
         [MAX_MEASUREMENT_PRICE_LOOKBACK_DAYS],
     )
@@ -170,8 +193,10 @@ def build_float_reference(
             public_float_value_usd,
             measurement_date,
             measurement_price_date,
-            measurement_raw_close,
+            measurement_reported_close,
             measurement_average_price,
+            measurement_price_used,
+            measurement_price_source,
             filed_date,
             form,
             accession,
