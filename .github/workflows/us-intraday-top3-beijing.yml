@@ -94,7 +94,7 @@ jobs:
           if [[ "${{ steps.params.outputs.refresh_sec }}" == "true" ]]; then
             args+=(--refresh-sec)
           fi
-          python -m us_intraday_picker.intraday_top3 "${args[@]}"
+          python -m us_intraday_picker.run_intraday_top3 "${args[@]}"
 
       - name: Verify ranking audit
         if: steps.picker.outputs.status == 'ready'
@@ -120,6 +120,14 @@ jobs:
               expected = row.get("change_pct") is not None and float(row["change_pct"]) <= -8.0
               if bool(row["drop_filter_pass"]) != expected:
                   raise SystemExit(f"Drop-filter mismatch for {row['symbol']}")
+              total_cap = row.get("nasdaq_market_cap")
+              float_cap = row.get("current_float_market_cap")
+              if total_cap and float_cap:
+                  ratio = float(float_cap) / float(total_cap)
+                  if not 0.01 <= ratio <= 1.50:
+                      raise SystemExit(
+                          f"Implausible float/total market-cap ratio for {row['symbol']}: {ratio}"
+                      )
           print("Verified latest-public-snapshot activity Top 3")
           PY
 
