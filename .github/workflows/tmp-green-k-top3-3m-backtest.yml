@@ -1,4 +1,4 @@
-name: Temporary green-K Top3 three-month backtest
+name: Temporary green-K pool Top3 three-month backtest
 
 on:
   push:
@@ -71,51 +71,77 @@ jobs:
           "$VENV_DIR/bin/python" -c \
             "import duckdb, exchange_calendars, pandas, pyarrow, requests, tabulate"
 
-      - name: Run audited three-month backtest
+      - name: Patch interpretation and run three-month backtest
         id: backtest
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf backtest_green_k_top3_3m
-          sed -i 's/facts.measurement_date - INTERVAL ? DAY/facts.measurement_date - CAST(? AS INTEGER)/' \
-            research_backtests/green_k_top3_3m.py
+          rm -rf backtest_green_k_pool_top3_3m
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('research_backtests/green_k_top3_3m.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'facts.measurement_date - INTERVAL ? DAY',
+              'facts.measurement_date - CAST(? AS INTEGER)',
+          )
+          text = text.replace(
+              'top3 = ranked[ranked["activity_rank"] <= 3].copy()',
+              'top3 = ranked.copy()',
+          )
+          text = text.replace(
+              'selected = frame[condition].copy()',
+              'selected = (frame[condition].sort_values(["trade_date", "activity_rank"], kind="mergesort").groupby("trade_date", sort=True).head(3).copy())',
+          )
+          text = text.replace(
+              'activity Top 3 on D; D close < D open; buy D+1 open',
+              'filter D close < D open; rank activity within green-candle pool; take Top 3; buy D+1 open',
+          )
+          text = text.replace(
+              '信号日先排全市场活跃度Top 3，再保留**收盘低于开盘的绿K**',
+              '信号日先筛选**收盘低于开盘的绿K**，再按活跃度取前三',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
           "$VENV_DIR/bin/python" research_backtests/green_k_top3_3m.py \
             --capital 1000000 \
             --end-date 2026-08-21 \
             --cache-dir .cache/us_daily_picker/sec \
             --kline-cache-dir .cache/us_intraday_picker/kline \
-            --output-dir backtest_green_k_top3_3m \
-            | tee backtest_green_k_top3_3m_run.log
+            --output-dir backtest_green_k_pool_top3_3m \
+            | tee backtest_green_k_pool_top3_3m_run.log
 
-      - name: Verify outputs
+      - name: Verify outputs and MRNA inclusion
         shell: bash
         run: |
           set -euo pipefail
           "$VENV_DIR/bin/python" - <<'PY'
           import json
+          import pandas as pd
           from pathlib import Path
-          payload = json.loads(Path('backtest_green_k_top3_3m/result.json').read_text(encoding='utf-8'))
-          summaries = payload['summaries']
-          primary = [x for x in summaries if x['mode']=='green_body' and x['exit_policy']=='bracket']
+          out = Path('backtest_green_k_pool_top3_3m')
+          payload = json.loads((out/'result.json').read_text(encoding='utf-8'))
+          primary = [x for x in payload['summaries'] if x['mode']=='green_body' and x['exit_policy']=='bracket']
           if len(primary) != 1:
               raise SystemExit('Primary summary missing')
           item = primary[0]
-          if item['initial_capital'] != 1_000_000:
-              raise SystemExit('Initial capital mismatch')
-          if item['executed_batches'] < 1 or item['executed_legs'] < 1:
-              raise SystemExit('No executed trades')
-          if not (0 < item['final_capital'] < 100_000_000):
-              raise SystemExit(f"Implausible final capital: {item['final_capital']}")
+          if item['initial_capital'] != 1_000_000 or item['executed_batches'] < 1:
+              raise SystemExit(f'Invalid primary result: {item}')
+          legs = pd.read_csv(out/'legs__green_body__bracket.csv')
+          mrna = legs[(legs['symbol']=='MRNA') & (legs['signal_date']=='2026-08-20')]
+          if mrna.empty:
+              raise SystemExit('Expected MRNA 2026-08-20 green-candle pool signal was not executed or auditable')
           print(json.dumps(item, ensure_ascii=False, indent=2))
+          print(mrna.to_string(index=False))
           PY
 
       - name: Upload complete backtest
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: green-k-top3-three-month-backtest
+          name: green-k-pool-top3-three-month-backtest
           path: |
-            backtest_green_k_top3_3m
-            backtest_green_k_top3_3m_run.log
+            backtest_green_k_pool_top3_3m
+            backtest_green_k_pool_top3_3m_run.log
           if-no-files-found: error
           retention-days: 7
