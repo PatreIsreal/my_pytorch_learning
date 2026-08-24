@@ -8,7 +8,7 @@ on:
       - .github/workflows/tmp-green-k-parameter-optimization-fast.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   optimize-fast:
@@ -20,6 +20,8 @@ jobs:
       VENV_DIR: .venv/us_intraday_picker
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -91,6 +93,22 @@ jobs:
           assert p['recommended']['test']['executed_batches'] >= 1
           print(json.dumps(p['test_improvement'], indent=2))
           PY
+      - name: Commit compact result package
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            green_k_parameter_optimization_fast/result.json \
+            green_k_parameter_optimization_fast/recommended_config.json \
+            green_k_parameter_optimization_fast/report.md \
+            green_k_parameter_optimization_fast/test_comparison.csv \
+            green_k_parameter_optimization_fast/period_results.csv \
+            green_k_parameter_optimization_fast/validation_candidates.csv
+          git commit -m "Publish fast green-K parameter optimization" || exit 0
+          git pull --rebase origin tmp/green-k-parameter-opt-20260824
+          git push origin HEAD:tmp/green-k-parameter-opt-20260824
       - name: Upload
         if: always()
         uses: actions/upload-artifact@v4
