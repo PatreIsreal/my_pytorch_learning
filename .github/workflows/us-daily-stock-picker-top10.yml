@@ -1,0 +1,286 @@
+name: US daily stock picker TOP10
+
+on:
+  schedule:
+    # 08:55 America/New_York premarket fallback (EDT/EST pair).
+    - cron: "55 12 * * 1-5"
+    - cron: "55 13 * * 1-5"
+    # 18:35 America/New_York after-hours primary run (EDT/EST pair).
+    - cron: "35 22 * * 1-5"
+    - cron: "35 23 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      as_of_date:
+        description: "Optional XNYS signal date (YYYY-MM-DD)"
+        required: false
+        type: string
+      phase:
+        description: "Run phase"
+        required: true
+        default: "manual"
+        type: choice
+        options:
+          - manual
+          - auto
+          - after_hours
+          - premarket
+      force:
+        description: "Overwrite an existing TOP10 result for the same signal date"
+        required: true
+        default: false
+        type: boolean
+      refresh_sec:
+        description: "Rebuild this week's SEC reference cache"
+        required: true
+        default: false
+        type: boolean
+  pull_request:
+    branches: [main]
+    paths:
+      - "us_daily_picker/top10_report.py"
+      - ".github/workflows/us-daily-stock-picker-top10.yml"
+  push:
+    branches: [main]
+    paths:
+      - "us_daily_picker/top10_report.py"
+      - ".github/workflows/us-daily-stock-picker-top10.yml"
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: us-daily-stock-picker-top10
+  cancel-in-progress: false
+
+jobs:
+  pick_top10:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      TZ: America/New_York
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: us_daily_picker/requirements.txt
+
+      - name: Resolve TOP10 run parameters
+        id: params
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "week=$(TZ=America/New_York date +%G-%V)" >> "$GITHUB_OUTPUT"
+
+          phase="auto"
+          as_of_date=""
+          force="false"
+          refresh_sec="false"
+          output_dir="daily_picks_top10"
+          should_run="true"
+
+          case "${{ github.event_name }}" in
+            schedule)
+              hm="$(TZ=America/New_York date +%H:%M)"
+              if [[ "$hm" > "18:29" && "$hm" < "18:51" ]]; then
+                phase="after_hours"
+              elif [[ "$hm" > "08:49" && "$hm" < "09:11" ]]; then
+                phase="premarket"
+              else
+                should_run="false"
+              fi
+              ;;
+            pull_request)
+              phase="manual"
+              as_of_date="2026-08-21"
+              force="true"
+              output_dir="test_output/daily_picks_top10"
+              ;;
+            push)
+              phase="manual"
+              force="true"
+              ;;
+            workflow_dispatch)
+              phase="${{ inputs.phase }}"
+              as_of_date="${{ inputs.as_of_date }}"
+              force="${{ inputs.force }}"
+              refresh_sec="${{ inputs.refresh_sec }}"
+              ;;
+          esac
+
+          echo "phase=$phase" >> "$GITHUB_OUTPUT"
+          echo "as_of_date=$as_of_date" >> "$GITHUB_OUTPUT"
+          echo "force=$force" >> "$GITHUB_OUTPUT"
+          echo "refresh_sec=$refresh_sec" >> "$GITHUB_OUTPUT"
+          echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+
+      - name: Restore weekly SEC and instrument reference cache
+        if: steps.params.outputs.should_run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: .cache/us_daily_picker/sec
+          key: us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
+
+      - name: Install picker dependencies
+        if: steps.params.outputs.should_run == 'true'
+        run: python -m pip install --disable-pip-version-check -r us_daily_picker/requirements.txt
+
+      - name: Run independent TOP10 selector
+        if: steps.params.outputs.should_run == 'true'
+        id: picker
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path("us_daily_picker/picker.py")
+          target = Path(".top10_picker.py")
+          text = source.read_text(encoding="utf-8")
+
+          required = {
+              "top_three = tradable.head(3).copy()": "top_three = tradable.head(10).copy()",
+              'SEC_USER_AGENT = "PatreIsreal daily US stock picker research@users.noreply.github.com"': 'SEC_USER_AGENT = "OpenAI point-in-time market research support@openai.com"',
+              "facts.measurement_date - INTERVAL ? DAY": "facts.measurement_date - CAST(? AS INTEGER)",
+              'f"[US PICKS] {context.signal_date.isoformat()} → "': 'f"[US PICKS TOP10] {context.signal_date.isoformat()} → "',
+              'write_frame_csv(result_directory / "top3.csv", top_three)': 'write_frame_csv(result_directory / "top10.csv", top_three)',
+              '"top_three": top_three.to_dict("records"),': '"top_ten": top_three.to_dict("records"),',
+          }
+          for old, new in required.items():
+              if old not in text:
+                  raise RuntimeError(f"Expected picker fragment is missing: {old}")
+              text = text.replace(old, new)
+
+          text = text.replace("market-wide top three", "market-wide top ten")
+          text = text.replace("全市场活跃度前三", "全市场活跃度前十")
+          text = text.replace("活跃度前三", "活跃度前十")
+          target.write_text(text, encoding="utf-8")
+          PY
+
+          args=(
+            --phase "${{ steps.params.outputs.phase }}"
+            --cache-dir .cache/us_daily_picker/sec
+            --work-dir .work/us_daily_picker_top10
+            --output-dir "${{ steps.params.outputs.output_dir }}"
+          )
+          if [[ -n "${{ steps.params.outputs.as_of_date }}" ]]; then
+            args+=(--as-of-date "${{ steps.params.outputs.as_of_date }}")
+          fi
+          if [[ "${{ steps.params.outputs.force }}" == "true" ]]; then
+            args+=(--force)
+          fi
+          if [[ "${{ steps.params.outputs.refresh_sec }}" == "true" ]]; then
+            args+=(--refresh-sec)
+          fi
+
+          python .top10_picker.py "${args[@]}"
+          python us_daily_picker/top10_report.py \
+            --output-dir "${{ steps.params.outputs.output_dir }}"
+
+      - name: Verify TOP10 audit output
+        if: >-
+          steps.params.outputs.should_run == 'true' &&
+          (steps.picker.outputs.status == 'ready' || steps.picker.outputs.status == 'no_signal')
+        shell: bash
+        run: |
+          set -euo pipefail
+          result_dir="${{ steps.params.outputs.output_dir }}/${{ steps.picker.outputs.signal_date }}"
+          python - "$result_dir/top10.csv" "$result_dir/picks.json" <<'PY'
+          import csv
+          import json
+          import sys
+          from pathlib import Path
+
+          csv_path = Path(sys.argv[1])
+          json_path = Path(sys.argv[2])
+          with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+              rows = list(csv.DictReader(handle))
+          payload = json.loads(json_path.read_text(encoding="utf-8"))
+          if len(rows) != 10:
+              raise SystemExit(f"Expected exactly 10 ranked rows, found {len(rows)}")
+          ranks = [int(float(row["activity_rank"])) for row in rows]
+          if ranks != list(range(1, 11)):
+              raise SystemExit(f"Unexpected activity ranks: {ranks}")
+          if len(payload.get("top_ten") or []) != 10:
+              raise SystemExit("picks.json top_ten does not contain 10 rows")
+          selected = payload.get("selected") or []
+          if any(float(row["drop_pct"]) > -8.0 for row in selected):
+              raise SystemExit("A selected row violates the -8% drop threshold")
+          print(f"Verified TOP10 ranking; selected count={len(selected)}")
+          PY
+
+      - name: Upload TOP10 files for audit
+        if: always() && steps.params.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-daily-picker-top10-${{ steps.picker.outputs.signal_date || github.run_id }}
+          path: |
+            ${{ steps.params.outputs.output_dir }}
+            .work/us_daily_picker_top10/*.md
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Commit dated TOP10 result and latest snapshot
+        if: >-
+          github.event_name != 'pull_request' &&
+          steps.params.outputs.should_run == 'true' &&
+          (steps.picker.outputs.status == 'ready' || steps.picker.outputs.status == 'no_signal')
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add daily_picks_top10
+          if git diff --cached --quiet; then
+            echo "No TOP10 result changes to commit."
+            exit 0
+          fi
+          git commit -m "Daily US TOP10 ranking: ${{ steps.picker.outputs.signal_date }}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Create or update TOP10 GitHub notification
+        if: >-
+          github.event_name != 'pull_request' &&
+          steps.params.outputs.should_run == 'true' &&
+          steps.picker.outputs.notify == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: ${{ steps.picker.outputs.issue_title }}
+          BODY_FILE: ${{ steps.picker.outputs.markdown_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ISSUES_JSON
+          ISSUES_JSON="$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --limit 100 --json number,title)"
+          issue_number="$(python - <<'PY'
+          import json
+          import os
+          title = os.environ["ISSUE_TITLE"]
+          items = json.loads(os.environ["ISSUES_JSON"])
+          for item in items:
+              if item.get("title") == title:
+                  print(item["number"])
+                  break
+          PY
+          )"
+
+          if [[ -n "$issue_number" ]]; then
+            gh issue edit "$issue_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$ISSUE_TITLE" \
+              --body-file "$BODY_FILE"
+          else
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$ISSUE_TITLE" \
+              --body-file "$BODY_FILE" \
+              --assignee PatreIsreal
+          fi
