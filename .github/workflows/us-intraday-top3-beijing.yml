@@ -94,7 +94,7 @@ jobs:
           if [[ "${{ steps.params.outputs.refresh_sec }}" == "true" ]]; then
             args+=(--refresh-sec)
           fi
-          python us_intraday_picker/intraday_top3.py "${args[@]}"
+          python -m us_intraday_picker.intraday_top3 "${args[@]}"
 
       - name: Verify ranking audit
         if: steps.picker.outputs.status == 'ready'
