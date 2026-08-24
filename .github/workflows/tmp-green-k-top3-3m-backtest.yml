@@ -77,6 +77,8 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf backtest_green_k_top3_3m
+          sed -i 's/facts.measurement_date - INTERVAL ? DAY/facts.measurement_date - CAST(? AS INTEGER)/' \
+            research_backtests/green_k_top3_3m.py
           "$VENV_DIR/bin/python" research_backtests/green_k_top3_3m.py \
             --capital 1000000 \
             --end-date 2026-08-21 \
