@@ -43,6 +43,7 @@ jobs:
     env:
       TZ: Asia/Shanghai
       PYTHONUNBUFFERED: "1"
+      VENV_DIR: .venv/us_intraday_picker
     steps:
       - uses: actions/checkout@v5
         with:
@@ -51,15 +52,15 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: us_daily_picker/requirements.txt
 
-      - name: Resolve run parameters and cache week
+      - name: Resolve run parameters and cache keys
         id: params
         shell: bash
         run: |
           set -euo pipefail
           echo "week=$(TZ=Asia/Shanghai date +%G-%V)" >> "$GITHUB_OUTPUT"
+          echo "bjt_date=$(TZ=Asia/Shanghai date +%F)" >> "$GITHUB_OUTPUT"
+          echo "started_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
           output_dir="intraday_picks_top3"
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             output_dir="test_output/intraday_picks_top3"
@@ -71,14 +72,39 @@ jobs:
           echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
           echo "refresh_sec=$refresh_sec" >> "$GITHUB_OUTPUT"
 
-      - name: Restore audited weekly SEC reference cache
+      - name: Restore reusable Python environment
+        uses: actions/cache@v4
+        with:
+          path: .venv/us_intraday_picker
+          key: us-intraday-venv-v1-${{ runner.os }}-py312-${{ hashFiles('us_daily_picker/requirements.txt') }}
+
+      - name: Restore compact SEC reference cache
         uses: actions/cache@v4
         with:
           path: .cache/us_daily_picker/sec
-          key: us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
+          key: us-intraday-sec-compact-v1-${{ runner.os }}-${{ steps.params.outputs.week }}
+          restore-keys: |
+            us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
 
-      - name: Install dependencies
-        run: python -m pip install --disable-pip-version-check -r us_daily_picker/requirements.txt
+      - name: Restore same-day market and derived caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/us_intraday_picker/kline
+            .cache/us_intraday_picker/derived
+          key: us-intraday-market-v2-${{ runner.os }}-${{ steps.params.outputs.bjt_date }}
+
+      - name: Prepare dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+            python -m venv "$VENV_DIR"
+            "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check \
+              -r us_daily_picker/requirements.txt
+          fi
+          "$VENV_DIR/bin/python" -c \
+            "import duckdb, exchange_calendars, orjson, pandas, pyarrow, requests"
 
       - name: Run latest public-snapshot Top 3
         id: picker
@@ -87,6 +113,8 @@ jobs:
           set -euo pipefail
           args=(
             --cache-dir .cache/us_daily_picker/sec
+            --kline-cache-dir .cache/us_intraday_picker/kline
+            --derived-cache-dir .cache/us_intraday_picker/derived
             --work-dir .work/us_intraday_picker
             --output-dir "${{ steps.params.outputs.output_dir }}"
             --force
@@ -94,14 +122,14 @@ jobs:
           if [[ "${{ steps.params.outputs.refresh_sec }}" == "true" ]]; then
             args+=(--refresh-sec)
           fi
-          python -m us_intraday_picker.run_intraday_top3 "${args[@]}"
+          "$VENV_DIR/bin/python" -m us_intraday_picker.run_intraday_top3 "${args[@]}"
 
-      - name: Verify ranking audit
+      - name: Verify ranking and prior-session signal audit
         if: steps.picker.outputs.status == 'ready'
         shell: bash
         run: |
           set -euo pipefail
-          python - "${{ steps.params.outputs.output_dir }}/latest.json" <<'PY'
+          "$VENV_DIR/bin/python" - "${{ steps.params.outputs.output_dir }}/latest.json" <<'PY'
           import json
           import sys
           from pathlib import Path
@@ -116,20 +144,42 @@ jobs:
           activity = [float(row["activity_ratio"]) for row in rows]
           if activity != sorted(activity, reverse=True):
               raise SystemExit(f"Activity is not descending: {activity}")
+          if not payload.get("methodology", {}).get("ranking_is_unconditional_on_drop"):
+              raise SystemExit("Ranking must be unconditional on the decline signal")
+          if not payload.get("previous_session_date") or not payload.get("reference_date"):
+              raise SystemExit("Previous/reference session dates are missing")
           for row in rows:
-              expected = row.get("change_pct") is not None and float(row["change_pct"]) <= -8.0
+              previous_change = row.get("previous_day_change_pct")
+              expected = previous_change is not None and float(previous_change) <= -8.0
               if bool(row["drop_filter_pass"]) != expected:
-                  raise SystemExit(f"Drop-filter mismatch for {row['symbol']}")
+                  raise SystemExit(f"Prior-session drop-filter mismatch for {row['symbol']}")
               total_cap = row.get("nasdaq_market_cap")
               float_cap = row.get("current_float_market_cap")
               if total_cap and float_cap:
                   ratio = float(float_cap) / float(total_cap)
-                  if not 0.01 <= ratio <= 1.50:
+                  if not 0.01 <= ratio <= 1.20:
                       raise SystemExit(
                           f"Implausible float/total market-cap ratio for {row['symbol']}: {ratio}"
                       )
-          print("Verified latest-public-snapshot activity Top 3")
+          print("Verified current activity Top 3 with previous-session decline signal")
           PY
+
+      - name: Record runtime
+        if: always()
+        shell: bash
+        run: |
+          elapsed=$(( $(date +%s) - ${{ steps.params.outputs.started_epoch }} ))
+          echo "### Intraday Top 3 runtime" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Workflow elapsed after parameter resolution: **${elapsed}s**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Selector runtime: **${{ steps.picker.outputs.runtime_seconds || 'n/a' }}s**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove bulky source archives before compact cache save
+        if: always()
+        shell: bash
+        run: |
+          rm -f \
+            .cache/us_daily_picker/sec/submissions.zip \
+            .cache/us_daily_picker/sec/companyfacts.zip
 
       - name: Upload run files for audit
         if: always()
