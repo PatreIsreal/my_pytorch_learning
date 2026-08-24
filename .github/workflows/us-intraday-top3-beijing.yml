@@ -43,6 +43,7 @@ jobs:
     env:
       TZ: Asia/Shanghai
       PYTHONUNBUFFERED: "1"
+      VENV_DIR: .venv/us_intraday_picker
     steps:
       - uses: actions/checkout@v5
         with:
@@ -51,8 +52,6 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: us_daily_picker/requirements.txt
 
       - name: Resolve run parameters and cache keys
         id: params
@@ -73,6 +72,12 @@ jobs:
           echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
           echo "refresh_sec=$refresh_sec" >> "$GITHUB_OUTPUT"
 
+      - name: Restore reusable Python environment
+        uses: actions/cache@v4
+        with:
+          path: .venv/us_intraday_picker
+          key: us-intraday-venv-v1-${{ runner.os }}-py312-${{ hashFiles('us_daily_picker/requirements.txt') }}
+
       - name: Restore compact SEC reference cache
         uses: actions/cache@v4
         with:
@@ -89,8 +94,17 @@ jobs:
             .cache/us_intraday_picker/derived
           key: us-intraday-market-v2-${{ runner.os }}-${{ steps.params.outputs.bjt_date }}
 
-      - name: Install dependencies
-        run: python -m pip install --disable-pip-version-check -r us_daily_picker/requirements.txt
+      - name: Prepare dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+            python -m venv "$VENV_DIR"
+            "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check \
+              -r us_daily_picker/requirements.txt
+          fi
+          "$VENV_DIR/bin/python" -c \
+            "import duckdb, exchange_calendars, orjson, pandas, pyarrow, requests"
 
       - name: Run latest public-snapshot Top 3
         id: picker
@@ -108,14 +122,14 @@ jobs:
           if [[ "${{ steps.params.outputs.refresh_sec }}" == "true" ]]; then
             args+=(--refresh-sec)
           fi
-          python -m us_intraday_picker.run_intraday_top3 "${args[@]}"
+          "$VENV_DIR/bin/python" -m us_intraday_picker.run_intraday_top3 "${args[@]}"
 
       - name: Verify ranking and prior-session signal audit
         if: steps.picker.outputs.status == 'ready'
         shell: bash
         run: |
           set -euo pipefail
-          python - "${{ steps.params.outputs.output_dir }}/latest.json" <<'PY'
+          "$VENV_DIR/bin/python" - "${{ steps.params.outputs.output_dir }}/latest.json" <<'PY'
           import json
           import sys
           from pathlib import Path
