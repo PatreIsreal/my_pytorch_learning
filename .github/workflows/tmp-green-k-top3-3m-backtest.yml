@@ -1,0 +1,113 @@
+name: Temporary green-K Top3 three-month backtest
+
+on:
+  push:
+    branches:
+      - tmp/green-k-top3-3m-backtest-20260824
+    paths:
+      - research_backtests/green_k_top3_3m.py
+      - .github/workflows/tmp-green-k-top3-3m-backtest.yml
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUNBUFFERED: "1"
+      VENV_DIR: .venv/us_intraday_picker
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Resolve cache keys
+        id: params
+        shell: bash
+        run: |
+          echo "week=$(TZ=Asia/Shanghai date +%G-%V)" >> "$GITHUB_OUTPUT"
+          echo "bjt_date=$(TZ=Asia/Shanghai date +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Python environment
+        uses: actions/cache@v4
+        with:
+          path: .venv/us_intraday_picker
+          key: us-intraday-venv-v1-${{ runner.os }}-py312-${{ hashFiles('us_daily_picker/requirements.txt') }}
+
+      - name: Restore compact SEC cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/us_daily_picker/sec
+          key: us-intraday-sec-compact-v1-${{ runner.os }}-${{ steps.params.outputs.week }}
+          restore-keys: |
+            us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
+
+      - name: Restore market cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/us_intraday_picker/kline
+          key: us-intraday-market-v2-${{ runner.os }}-${{ steps.params.outputs.bjt_date }}
+
+      - name: Prepare dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+            python -m venv "$VENV_DIR"
+            "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check \
+              -r us_daily_picker/requirements.txt
+          fi
+          "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check tabulate
+          "$VENV_DIR/bin/python" -c \
+            "import duckdb, exchange_calendars, pandas, pyarrow, requests, tabulate"
+
+      - name: Run audited three-month backtest
+        id: backtest
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf backtest_green_k_top3_3m
+          "$VENV_DIR/bin/python" research_backtests/green_k_top3_3m.py \
+            --capital 1000000 \
+            --end-date 2026-08-21 \
+            --cache-dir .cache/us_daily_picker/sec \
+            --kline-cache-dir .cache/us_intraday_picker/kline \
+            --output-dir backtest_green_k_top3_3m \
+            | tee backtest_green_k_top3_3m_run.log
+
+      - name: Verify outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$VENV_DIR/bin/python" - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('backtest_green_k_top3_3m/result.json').read_text(encoding='utf-8'))
+          summaries = payload['summaries']
+          primary = [x for x in summaries if x['mode']=='green_body' and x['exit_policy']=='bracket']
+          if len(primary) != 1:
+              raise SystemExit('Primary summary missing')
+          item = primary[0]
+          if item['initial_capital'] != 1_000_000:
+              raise SystemExit('Initial capital mismatch')
+          if item['executed_batches'] < 1 or item['executed_legs'] < 1:
+              raise SystemExit('No executed trades')
+          if not (0 < item['final_capital'] < 100_000_000):
+              raise SystemExit(f"Implausible final capital: {item['final_capital']}")
+          print(json.dumps(item, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Upload complete backtest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: green-k-top3-three-month-backtest
+          path: |
+            backtest_green_k_top3_3m
+            backtest_green_k_top3_3m_run.log
+          if-no-files-found: error
+          retention-days: 7
