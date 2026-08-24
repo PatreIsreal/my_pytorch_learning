@@ -1,13 +1,13 @@
-name: US daily stock picker Top 10
+name: US daily stock picker TOP10
 
 on:
   schedule:
-    # Independent Top 10 task. Primary run at 18:35 America/New_York.
+    # 08:55 America/New_York premarket fallback (EDT/EST pair).
+    - cron: "55 12 * * 1-5"
+    - cron: "55 13 * * 1-5"
+    # 18:35 America/New_York after-hours primary run (EDT/EST pair).
     - cron: "35 22 * * 1-5"
     - cron: "35 23 * * 1-5"
-    # Premarket fallback at 09:00 America/New_York.
-    - cron: "0 13 * * 1-5"
-    - cron: "0 14 * * 1-5"
   workflow_dispatch:
     inputs:
       as_of_date:
@@ -25,24 +25,24 @@ on:
           - after_hours
           - premarket
       force:
-        description: "Overwrite an existing Top 10 result for the same signal date"
+        description: "Overwrite an existing TOP10 result for the same signal date"
         required: true
         default: false
         type: boolean
       refresh_sec:
-        description: "Rebuild this week's independent SEC reference cache"
+        description: "Rebuild this week's SEC reference cache"
         required: true
         default: false
         type: boolean
   pull_request:
     branches: [main]
     paths:
-      - "us_daily_picker/picker.py"
+      - "us_daily_picker/top10_report.py"
       - ".github/workflows/us-daily-stock-picker-top10.yml"
   push:
     branches: [main]
     paths:
-      - "us_daily_picker/picker.py"
+      - "us_daily_picker/top10_report.py"
       - ".github/workflows/us-daily-stock-picker-top10.yml"
 
 permissions:
@@ -54,7 +54,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  pick-top10:
+  pick_top10:
     runs-on: ubuntu-latest
     timeout-minutes: 55
     env:
@@ -71,7 +71,7 @@ jobs:
           cache: pip
           cache-dependency-path: us_daily_picker/requirements.txt
 
-      - name: Resolve Top 10 run parameters and SEC cache week
+      - name: Resolve TOP10 run parameters
         id: params
         shell: bash
         run: |
@@ -83,8 +83,19 @@ jobs:
           force="false"
           refresh_sec="false"
           output_dir="daily_picks_top10"
+          should_run="true"
 
           case "${{ github.event_name }}" in
+            schedule)
+              hm="$(TZ=America/New_York date +%H:%M)"
+              if [[ "$hm" > "18:29" && "$hm" < "18:51" ]]; then
+                phase="after_hours"
+              elif [[ "$hm" > "08:49" && "$hm" < "09:11" ]]; then
+                phase="premarket"
+              else
+                should_run="false"
+              fi
+              ;;
             pull_request)
               phase="manual"
               as_of_date="2026-08-21"
@@ -108,60 +119,54 @@ jobs:
           echo "force=$force" >> "$GITHUB_OUTPUT"
           echo "refresh_sec=$refresh_sec" >> "$GITHUB_OUTPUT"
           echo "output_dir=$output_dir" >> "$GITHUB_OUTPUT"
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
 
-      - name: Restore independent weekly SEC reference cache
+      - name: Restore weekly SEC and instrument reference cache
+        if: steps.params.outputs.should_run == 'true'
         uses: actions/cache@v4
         with:
-          path: .cache/us_daily_picker_top10/sec
-          key: us-daily-picker-top10-sec-v1-${{ runner.os }}-${{ steps.params.outputs.week }}
+          path: .cache/us_daily_picker/sec
+          key: us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
 
       - name: Install picker dependencies
+        if: steps.params.outputs.should_run == 'true'
         run: python -m pip install --disable-pip-version-check -r us_daily_picker/requirements.txt
 
-      - name: Run audited Top 10 daily selector
+      - name: Run independent TOP10 selector
+        if: steps.params.outputs.should_run == 'true'
         id: picker
         shell: bash
         run: |
           set -euo pipefail
-          # Create a runtime-only Top 10 variant. The original Top 3 workflow
-          # and source file remain unchanged on the default branch.
           python - <<'PY'
           from pathlib import Path
 
-          path = Path("us_daily_picker/picker.py")
-          text = path.read_text(encoding="utf-8")
-          replacements = {
-              'SEC_USER_AGENT = "PatreIsreal daily US stock picker research@users.noreply.github.com"':
-                  'SEC_USER_AGENT = "OpenAI point-in-time market research support@openai.com"',
-              "facts.measurement_date - INTERVAL ? DAY":
-                  "facts.measurement_date - CAST(? AS INTEGER)",
-              "top_three = tradable.head(3).copy()":
-                  "top_three = tradable.head(10).copy()",
-              "Keep the market-wide top three":
-                  "Keep the market-wide top ten",
-              "当日全市场活跃度前三中":
-                  "当日全市场活跃度前十中",
-              "## 全市场活跃度前三（审计表）":
-                  "## 全市场活跃度前十（审计表）",
-              'result_directory / "top3.csv"':
-                  'result_directory / "top10.csv"',
-              '"top_three": top_three.to_dict("records")':
-                  '"top_ten": top_three.to_dict("records")',
-              '[US PICKS]':
-                  '[US PICKS TOP10]',
-              '[US PICKS DATA]':
-                  '[US PICKS TOP10 DATA]',
+          source = Path("us_daily_picker/picker.py")
+          target = Path(".top10_picker.py")
+          text = source.read_text(encoding="utf-8")
+
+          required = {
+              "top_three = tradable.head(3).copy()": "top_three = tradable.head(10).copy()",
+              'SEC_USER_AGENT = "PatreIsreal daily US stock picker research@users.noreply.github.com"': 'SEC_USER_AGENT = "OpenAI point-in-time market research support@openai.com"',
+              "facts.measurement_date - INTERVAL ? DAY": "facts.measurement_date - CAST(? AS INTEGER)",
+              'f"[US PICKS] {context.signal_date.isoformat()} → "': 'f"[US PICKS TOP10] {context.signal_date.isoformat()} → "',
+              'write_frame_csv(result_directory / "top3.csv", top_three)': 'write_frame_csv(result_directory / "top10.csv", top_three)',
+              '"top_three": top_three.to_dict("records"),': '"top_ten": top_three.to_dict("records"),',
           }
-          for old, new in replacements.items():
+          for old, new in required.items():
               if old not in text:
-                  raise RuntimeError(f"Expected picker source fragment not found: {old}")
+                  raise RuntimeError(f"Expected picker fragment is missing: {old}")
               text = text.replace(old, new)
-          path.write_text(text, encoding="utf-8")
+
+          text = text.replace("market-wide top three", "market-wide top ten")
+          text = text.replace("全市场活跃度前三", "全市场活跃度前十")
+          text = text.replace("活跃度前三", "活跃度前十")
+          target.write_text(text, encoding="utf-8")
           PY
 
           args=(
             --phase "${{ steps.params.outputs.phase }}"
-            --cache-dir .cache/us_daily_picker_top10/sec
+            --cache-dir .cache/us_daily_picker/sec
             --work-dir .work/us_daily_picker_top10
             --output-dir "${{ steps.params.outputs.output_dir }}"
           )
@@ -174,10 +179,15 @@ jobs:
           if [[ "${{ steps.params.outputs.refresh_sec }}" == "true" ]]; then
             args+=(--refresh-sec)
           fi
-          python us_daily_picker/picker.py "${args[@]}"
 
-      - name: Verify Top 10 audit output
-        if: steps.picker.outputs.status == 'ready' || steps.picker.outputs.status == 'no_signal'
+          python .top10_picker.py "${args[@]}"
+          python us_daily_picker/top10_report.py \
+            --output-dir "${{ steps.params.outputs.output_dir }}"
+
+      - name: Verify TOP10 audit output
+        if: >-
+          steps.params.outputs.should_run == 'true' &&
+          (steps.picker.outputs.status == 'ready' || steps.picker.outputs.status == 'no_signal')
         shell: bash
         run: |
           set -euo pipefail
@@ -203,11 +213,11 @@ jobs:
           selected = payload.get("selected") or []
           if any(float(row["drop_pct"]) > -8.0 for row in selected):
               raise SystemExit("A selected row violates the -8% drop threshold")
-          print(f"Verified Top 10 ranking; selected count={len(selected)}")
+          print(f"Verified TOP10 ranking; selected count={len(selected)}")
           PY
 
-      - name: Upload Top 10 run files for audit
-        if: always()
+      - name: Upload TOP10 files for audit
+        if: always() && steps.params.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: us-daily-picker-top10-${{ steps.picker.outputs.signal_date || github.run_id }}
@@ -217,9 +227,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Commit dated Top 10 result and latest snapshot
+      - name: Commit dated TOP10 result and latest snapshot
         if: >-
           github.event_name != 'pull_request' &&
+          steps.params.outputs.should_run == 'true' &&
           (steps.picker.outputs.status == 'ready' || steps.picker.outputs.status == 'no_signal')
         shell: bash
         run: |
@@ -228,16 +239,17 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add daily_picks_top10
           if git diff --cached --quiet; then
-            echo "No Top 10 result changes to commit."
+            echo "No TOP10 result changes to commit."
             exit 0
           fi
-          git commit -m "Daily US Top 10 picks: ${{ steps.picker.outputs.signal_date }}"
+          git commit -m "Daily US TOP10 ranking: ${{ steps.picker.outputs.signal_date }}"
           git pull --rebase origin main
           git push origin HEAD:main
 
-      - name: Create or update Top 10 GitHub notification
+      - name: Create or update TOP10 GitHub notification
         if: >-
           github.event_name != 'pull_request' &&
+          steps.params.outputs.should_run == 'true' &&
           steps.picker.outputs.notify == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
