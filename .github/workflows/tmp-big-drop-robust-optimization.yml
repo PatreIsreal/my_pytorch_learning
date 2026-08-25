@@ -1,0 +1,230 @@
+name: Temporary robust big-drop optimization
+
+on:
+  push:
+    branches:
+      - tmp/big-drop-robust-opt-20260825
+    paths:
+      - .github/workflows/tmp-big-drop-robust-optimization.yml
+
+permissions:
+  contents: read
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      VENV_DIR: .venv/us_intraday_picker
+      SCRIPT_B64: |
+          H4sIANQ4jWoC/+09a5PjxnHf+StgqBQBJ5BLcrXKhTZVUSS5/EFlqXxyuVIsFgpLgFx4SYACwNtdrTalOFYsWS87tuWHnMiOJcvl
+          smKXH9HZUuL/ktzuXT7pL6S75z0Aubt3J1eSiku+BQfdPT090z3dPQ/c96mtVVls7abZVpJdd5ZH1V6ebbdc1/1SNN9vT/PiICpi
+          J19W6SJ9LqrSPHOg0Kn2EidOi2RSObvprB0X+dKJJlV6Pa2OnLIqoiqZHXVarWvpLIvmThwdOY8PWm3ni51rHXifT/ZLZ5JfT4ok
+          dnaPnGWeZlU7zdpQTeJce+IxZ7nanacTZzrPo6oDiE9GxSxxsmQGPFxPnMk8L5N2lbfpwSmSalVkCPe5dLbnxPl8HhXt6/l8tUi2
+          pkWStImQZBEhn1pia4C5SZTF8yTgNOf5hJoZOMukKNOySrIJvJynz67SGFsH0MDHYdXOl0nmzKKlM03nFcAi0b9aHTmrpVPlICGo
+          1smiRVI6UPPjD/aAy9kK+SqTskRBIoHASZ5dARMHCTBeocSSOUgVX68AjgQ9TYuy4gQBuIDK5kfOQZrF+UHZcZ4hEGwJf+mkUCXU
+          NtlLJvut3WQSASknrZyDCF7MiySKj5w0K5dQEcg/zZxlkUKnFkmZRMVkL3CyHGSFpWWVZomzl8/jfAXcwbhoTYt84YThdAUiT8LQ
+          SRfLvADwDJBIcmWrJcqK2TIqykT8Zn/m6W5nVaVzUfrlMs/E8yKq9sRzAZLOF+JXeVSyquOoiibzqETpiHrKOJ1UgXolIRMaUBwM
+          fweyNHDw3ziZVxF7fC7PEoa4BC6AS4H3NDJFL6qjZZrNRPmj2ZFsarZaLGFslE62FEVL4B8FXjrLuNV66vNPhF969K/Dx5669owz
+          dLqdbre/02q1/lIy7UEVzyXZ8JlilfgtKnKY/jyWZ9N0Nmg58L8JPYdpPEA9oyLUvnCRZgOmLlpZdKiXgUD3WRloG5Xs5vGRjcnK
+          TExSjVCohv1WUxSbGKhHY5FFoEjrqNEiX2WVXUpP4aROVqi2XQ5VhaSFrNXnCfyJw7TSxV1F+0m4LPJpWulUwYQtQR5laVeFqlKv
+          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
+          jzY0VYh5AAA=
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Resolve cache keys
+        id: params
+        shell: bash
+        run: |
+          echo "week=$(TZ=Asia/Shanghai date +%G-%V)" >> "$GITHUB_OUTPUT"
+          echo "bjt_date=$(TZ=Asia/Shanghai date +%F)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: .venv/us_intraday_picker
+          key: us-intraday-venv-v1-${{ runner.os }}-py312-${{ hashFiles('us_daily_picker/requirements.txt') }}
+      - uses: actions/cache@v4
+        with:
+          path: .cache/us_daily_picker/sec
+          key: us-intraday-sec-compact-v1-${{ runner.os }}-${{ steps.params.outputs.week }}
+          restore-keys: |
+            us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
+      - uses: actions/cache@v4
+        with:
+          path: .cache/us_intraday_picker/kline
+          key: us-intraday-market-v2-${{ runner.os }}-${{ steps.params.outputs.bjt_date }}
+          restore-keys: |
+            us-intraday-market-v2-${{ runner.os }}-
+
+      - name: Materialize optimizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+            python -m venv "$VENV_DIR"
+            "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check -r us_daily_picker/requirements.txt
+          fi
+          "$VENV_DIR/bin/python" - <<'PYCODE'
+          import base64, gzip, hashlib, os
+          from pathlib import Path
+          encoded = ''.join(os.environ['SCRIPT_B64'].split())
+          decoded = gzip.decompress(base64.b64decode(encoded, validate=True))
+          expected = 'a7435ed68d731fa2f8723b66e132d26e7858dac1b2476e25f2a508bf9010ab5e'
+          digest = hashlib.sha256(decoded).hexdigest()
+          assert digest == expected, (digest, expected)
+          path = Path('research_backtests/big_drop_optimizer.py')
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_bytes(decoded)
+          PYCODE
+          "$VENV_DIR/bin/python" -m py_compile research_backtests/big_drop_optimizer.py
+          sed -i 's/facts.measurement_date - INTERVAL ? DAY/facts.measurement_date - CAST(? AS INTEGER)/' research_backtests/green_k_top3_3m.py
+          sed -i 's/top3 = ranked\[ranked\["activity_rank"\] <= 3\]\.copy()/top3 = ranked.copy()/' research_backtests/green_k_top3_3m.py
+
+      - name: Run robust walk-forward optimization
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf big_drop_parameter_optimization
+          "$VENV_DIR/bin/python" research_backtests/big_drop_optimizer.py \
+            --capital 1000000 \
+            --end-date 2026-08-21 \
+            --signal-configs 1500 \
+            --top-signals 40 \
+            --seed 20260825 \
+            --cache-dir .cache/us_daily_picker/sec \
+            --kline-cache-dir .cache/us_intraday_picker/kline \
+            --output-dir big_drop_parameter_optimization \
+            | tee big_drop_parameter_optimization_run.log
+
+      - name: Verify results
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$VENV_DIR/bin/python" - <<'PYCODE'
+          import json
+          from pathlib import Path
+          p = json.loads(Path('big_drop_parameter_optimization/result.json').read_text())
+          assert p['baseline']['periods']['recheck']['executed_batches'] >= 1
+          assert p['walk_forward_candidate']['periods']['recheck']['executed_batches'] >= 1
+          print(json.dumps({
+              'baseline': p['baseline']['periods']['recheck'],
+              'walk_forward': p['walk_forward_candidate']['periods']['recheck'],
+          }, ensure_ascii=False, indent=2))
+          PYCODE
+
+      - name: Upload complete audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: robust-big-drop-parameter-optimization
+          path: |
+            big_drop_parameter_optimization
+            big_drop_parameter_optimization_run.log
+          if-no-files-found: error
+          retention-days: 7
