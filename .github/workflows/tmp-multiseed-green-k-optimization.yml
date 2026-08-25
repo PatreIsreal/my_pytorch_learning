@@ -1,0 +1,138 @@
+name: Temporary multiseed green-K optimization
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/tmp-multiseed-green-k-optimization.yml
+
+permissions:
+  contents: read
+
+jobs:
+  optimize:
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [20260825, 20260917, 20261009]
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      VENV_DIR: .venv/us_intraday_picker
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Resolve cache keys
+        id: params
+        shell: bash
+        run: |
+          echo "week=$(TZ=Asia/Shanghai date +%G-%V)" >> "$GITHUB_OUTPUT"
+          echo "bjt_date=$(TZ=Asia/Shanghai date +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Python environment
+        uses: actions/cache@v4
+        with:
+          path: .venv/us_intraday_picker
+          key: us-intraday-venv-v1-${{ runner.os }}-py312-${{ hashFiles('us_daily_picker/requirements.txt') }}
+
+      - name: Restore compact SEC cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/us_daily_picker/sec
+          key: us-intraday-sec-compact-v1-${{ runner.os }}-${{ steps.params.outputs.week }}
+          restore-keys: |
+            us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
+
+      - name: Restore market cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/us_intraday_picker/kline
+          key: us-intraday-market-v2-${{ runner.os }}-${{ steps.params.outputs.bjt_date }}
+          restore-keys: |
+            us-intraday-market-v2-${{ runner.os }}-
+
+      - name: Prepare optimizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+            python -m venv "$VENV_DIR"
+            "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check \
+              -r us_daily_picker/requirements.txt
+          fi
+          cat research_backtests/optimizer_payload/opt_*.b64 | tr -d '\n\r ' > optimizer_payload.b64
+          "$VENV_DIR/bin/python" - <<'PY'
+          import base64, gzip, hashlib
+          from pathlib import Path
+
+          encoded = Path('optimizer_payload.b64').read_text(encoding='utf-8')
+          decoded = gzip.decompress(base64.b64decode(encoded, validate=True))
+          digest = hashlib.sha256(decoded).hexdigest()
+          expected = 'dfaeb2ac1c4670da76ccf03c82c1b7f08d2d513987eb1f3b541e673dda18f079'
+          assert digest == expected, (digest, expected)
+          Path('optimize_green_k_parameters.py').write_bytes(decoded)
+          PY
+          "$VENV_DIR/bin/python" -m py_compile optimize_green_k_parameters.py
+          sed -i 's/facts.measurement_date - INTERVAL ? DAY/facts.measurement_date - CAST(? AS INTEGER)/' \
+            research_backtests/green_k_top3_3m.py
+          sed -i 's/top3 = ranked\[ranked\["activity_rank"\] <= 3\]\.copy()/top3 = ranked.copy()/' \
+            research_backtests/green_k_top3_3m.py
+
+      - name: Run walk-forward search
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="green_k_multiseed_${{ matrix.seed }}"
+          rm -rf "$OUT"
+          "$VENV_DIR/bin/python" optimize_green_k_parameters.py \
+            --capital 1000000 \
+            --end-date 2026-08-21 \
+            --signal-configs 800 \
+            --top-signal-configs 30 \
+            --seed "${{ matrix.seed }}" \
+            --cache-dir .cache/us_daily_picker/sec \
+            --kline-cache-dir .cache/us_intraday_picker/kline \
+            --output-dir "$OUT" \
+            | tee "${OUT}_run.log"
+
+      - name: Verify result
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$VENV_DIR/bin/python" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          seed = os.environ['MATRIX_SEED']
+          out = Path(f'green_k_multiseed_{seed}')
+          payload = json.loads((out / 'result.json').read_text(encoding='utf-8'))
+          assert payload['baseline']['test']['executed_batches'] >= 1
+          assert payload['recommended']['test']['executed_batches'] >= 1
+          print(json.dumps({
+              'seed': seed,
+              'recommended_signal': payload['recommended']['signal'],
+              'recommended_exit': payload['recommended']['exit'],
+              'recommended_test': payload['recommended']['test'],
+              'oracle_test': payload['oracle_diagnostic_only'],
+          }, ensure_ascii=False, indent=2))
+          PY
+        env:
+          MATRIX_SEED: ${{ matrix.seed }}
+
+      - name: Upload complete audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: green-k-multiseed-${{ matrix.seed }}
+          path: |
+            green_k_multiseed_${{ matrix.seed }}
+            green_k_multiseed_${{ matrix.seed }}_run.log
+          if-no-files-found: error
+          retention-days: 7
