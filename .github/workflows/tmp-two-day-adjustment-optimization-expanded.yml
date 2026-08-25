@@ -1,0 +1,156 @@
+name: Temporary expanded two-day adjustment optimization
+
+on:
+  push:
+    branches:
+      - tmp/two-day-adjustment-optimization-20260825
+    paths:
+      - .github/workflows/tmp-two-day-adjustment-optimization-expanded.yml
+
+permissions:
+  contents: read
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      VENV_DIR: .venv/us_intraday_picker
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Resolve cache keys
+        id: params
+        shell: bash
+        run: |
+          echo "week=$(TZ=Asia/Shanghai date +%G-%V)" >> "$GITHUB_OUTPUT"
+          echo "bjt_date=$(TZ=Asia/Shanghai date +%F)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: .venv/us_intraday_picker
+          key: us-intraday-venv-v1-${{ runner.os }}-py312-${{ hashFiles('us_daily_picker/requirements.txt') }}
+      - uses: actions/cache@v4
+        with:
+          path: .cache/us_daily_picker/sec
+          key: us-intraday-sec-compact-v1-${{ runner.os }}-${{ steps.params.outputs.week }}
+          restore-keys: |
+            us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
+      - uses: actions/cache@v4
+        with:
+          path: .cache/us_intraday_picker/kline
+          key: us-intraday-market-v2-${{ runner.os }}-${{ steps.params.outputs.bjt_date }}
+          restore-keys: |
+            us-intraday-market-v2-${{ runner.os }}-
+
+      - name: Materialize and expand research script
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+            python -m venv "$VENV_DIR"
+            "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check -r us_daily_picker/requirements.txt
+          fi
+          "$VENV_DIR/bin/python" - <<'PYCODE'
+          import base64, gzip, hashlib, re
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/tmp-two-day-adjustment-optimization.yml').read_text(encoding='utf-8')
+          match = re.search(r'^      SCRIPT_B64: \|\n((?:          .*\n)+?)    steps:\n', workflow, flags=re.MULTILINE)
+          if not match:
+              raise RuntimeError('SCRIPT_B64 block not found')
+          encoded = ''.join(line.strip() for line in match.group(1).splitlines())
+          decoded = gzip.decompress(base64.b64decode(encoded, validate=True))
+          expected = '30d76ebf476f6585d4e9825af1689d8970af197a216d50202eb509b08daef983'
+          if hashlib.sha256(decoded).hexdigest() != expected:
+              raise RuntimeError('source digest mismatch')
+          text = decoded.decode('utf-8')
+          replacements = [
+              (
+                  '    module = importlib.util.module_from_spec(spec)\n    spec.loader.exec_module(module)',
+                  '    module = importlib.util.module_from_spec(spec)\n    import sys\n    sys.modules[spec.name] = module\n    spec.loader.exec_module(module)',
+              ),
+              (
+                  '    if not metrics or any(item["executed_batches"] < 4 for item in metrics):\n        return -1e9\n    if sum(item["executed_batches"] for item in metrics) < 18:\n        return -1e9',
+                  '    if not metrics or any(item["executed_batches"] < 1 for item in metrics):\n        return -1e9\n    if sum(item["executed_batches"] for item in metrics) < 6:\n        return -1e9',
+              ),
+              (
+                  '    body_pairs = [(-10, -1), (-15, -1), (-15, -3), (-20, -2), (-20, -3), (-20, -5), (-30, -3), (-30, -5)]',
+                  '    body_pairs = [(-5, -0.5), (-8, -0.5), (-8, -1), (-10, -1), (-15, -1), (-15, -2), (-15, -3), (-20, -2), (-20, -3), (-20, -5), (-30, -3), (-30, -5)]',
+              ),
+              (
+                  '    close_pairs = [(-10, 0), (-15, 0), (-15, -2), (-20, -2), (-20, -5), (-30, -5), (-30, -8), (-50, -5), (-50, -8)]',
+                  '    close_pairs = [(-5, 0), (-8, 0), (-8, -1), (-10, 0), (-10, -1), (-15, 0), (-15, -2), (-20, -2), (-20, -5), (-30, -5), (-30, -8), (-50, -5), (-50, -8)]',
+              ),
+              (
+                  '    gap_pairs = [(-10, 0), (-5, 0), (-5, 3), (-2, 2), (0, 5), (-10, 3)]',
+                  '    gap_pairs = [(-15, 0), (-10, 0), (-8, 0), (-5, 0), (-5, 3), (-2, 2), (0, 5), (-10, 3), (-15, 5)]',
+              ),
+              ('            rng.choice([5, 8, 10, 15, 20, 30]),', '            rng.choice([0, 2, 3, 5, 8, 10, 15, 20, 30]),'),
+              ('            rng.choice([None, 0, 3, 5]),', '            rng.choice([None, -5, 0, 3, 5]),'),
+              ('            rng.choice([3, 5, 10, 20, 50]),', '            rng.choice([3, 5, 10, 20, 50, 100]),'),
+              ('            rng.choice([0.15, 0.25, 0.40, 0.60, 0.80]),', '            rng.choice([0.05, 0.10, 0.15, 0.25, 0.40, 0.60, 0.80]),'),
+              ('            rng.choice([2, 5, 10]),', '            rng.choice([1, 2, 5, 10]),'),
+              ('            rng.choice([5_000_000, 10_000_000, 20_000_000]),', '            rng.choice([1_000_000, 5_000_000, 10_000_000, 20_000_000]),'),
+              ('            rng.choice([0.0, 0.01, 0.02, 0.05]),', '            rng.choice([0.0, 0.005, 0.01, 0.02, 0.05]),'),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise RuntimeError(f'patch anchor missing: {old[:80]}')
+              text = text.replace(old, new)
+          path = Path('research_backtests/two_day_adjustment_optimizer.py')
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(text, encoding='utf-8')
+          PYCODE
+          "$VENV_DIR/bin/python" -m py_compile research_backtests/two_day_adjustment_optimizer.py
+          sed -i 's/facts.measurement_date - INTERVAL ? DAY/facts.measurement_date - CAST(? AS INTEGER)/' research_backtests/green_k_top3_3m.py
+          sed -i 's/top3 = ranked\[ranked\["activity_rank"\] <= 3\]\.copy()/top3 = ranked.copy()/' research_backtests/green_k_top3_3m.py
+
+      - name: Run expanded walk-forward search
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf two_day_adjustment_optimization_expanded
+          "$VENV_DIR/bin/python" research_backtests/two_day_adjustment_optimizer.py \
+            --capital 1000000 \
+            --end-date 2026-08-21 \
+            --signal-configs 1200 \
+            --top-signals 30 \
+            --seed 20260825 \
+            --cache-dir .cache/us_daily_picker/sec \
+            --kline-cache-dir .cache/us_intraday_picker/kline \
+            --output-dir two_day_adjustment_optimization_expanded \
+            | tee two_day_adjustment_optimization_expanded_run.log
+
+      - name: Verify outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$VENV_DIR/bin/python" - <<'PYCODE'
+          import json
+          from pathlib import Path
+          p = json.loads(Path('two_day_adjustment_optimization_expanded/result.json').read_text())
+          assert p['walk_forward_candidate']['periods']['recheck']['executed_batches'] >= 1
+          print(json.dumps({
+              'walk_forward': p['walk_forward_candidate']['periods']['recheck'],
+              'diagnostic': p['diagnostic_all_windows_candidate']['periods']['recheck'],
+              'big_drop': p['baselines']['big_drop_market_top3']['recheck'],
+              'green_pool': p['baselines']['green_pool_top3']['recheck'],
+          }, ensure_ascii=False, indent=2))
+          PYCODE
+
+      - name: Upload complete audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: two-day-adjustment-optimization-expanded
+          path: |
+            two_day_adjustment_optimization_expanded
+            two_day_adjustment_optimization_expanded_run.log
+          if-no-files-found: error
+          retention-days: 7
