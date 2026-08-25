@@ -1,0 +1,136 @@
+name: Temporary two-day adjustment optimization rerun
+
+on:
+  push:
+    branches:
+      - tmp/two-day-adjustment-optimization-20260825
+    paths:
+      - .github/workflows/tmp-two-day-adjustment-optimization-rerun.yml
+
+permissions:
+  contents: read
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      VENV_DIR: .venv/us_intraday_picker
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Resolve cache keys
+        id: params
+        shell: bash
+        run: |
+          echo "week=$(TZ=Asia/Shanghai date +%G-%V)" >> "$GITHUB_OUTPUT"
+          echo "bjt_date=$(TZ=Asia/Shanghai date +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Python environment
+        uses: actions/cache@v4
+        with:
+          path: .venv/us_intraday_picker
+          key: us-intraday-venv-v1-${{ runner.os }}-py312-${{ hashFiles('us_daily_picker/requirements.txt') }}
+
+      - name: Restore compact SEC cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/us_daily_picker/sec
+          key: us-intraday-sec-compact-v1-${{ runner.os }}-${{ steps.params.outputs.week }}
+          restore-keys: |
+            us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
+
+      - name: Restore market cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/us_intraday_picker/kline
+          key: us-intraday-market-v2-${{ runner.os }}-${{ steps.params.outputs.bjt_date }}
+          restore-keys: |
+            us-intraday-market-v2-${{ runner.os }}-
+
+      - name: Materialize and patch research script
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+            python -m venv "$VENV_DIR"
+            "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check \
+              -r us_daily_picker/requirements.txt
+          fi
+          "$VENV_DIR/bin/python" - <<'PYCODE'
+          import base64, gzip, hashlib, re
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/tmp-two-day-adjustment-optimization.yml').read_text(encoding='utf-8')
+          match = re.search(r'^      SCRIPT_B64: \|\n((?:          .*\n)+?)    steps:\n', workflow, flags=re.MULTILINE)
+          if not match:
+              raise RuntimeError('SCRIPT_B64 block not found')
+          encoded = ''.join(line.strip() for line in match.group(1).splitlines())
+          decoded = gzip.decompress(base64.b64decode(encoded, validate=True))
+          expected = '30d76ebf476f6585d4e9825af1689d8970af197a216d50202eb509b08daef983'
+          digest = hashlib.sha256(decoded).hexdigest()
+          if digest != expected:
+              raise RuntimeError((digest, expected))
+          path = Path('research_backtests/two_day_adjustment_optimizer.py')
+          path.parent.mkdir(parents=True, exist_ok=True)
+          text = decoded.decode('utf-8')
+          old = '    module = importlib.util.module_from_spec(spec)\n    spec.loader.exec_module(module)'
+          new = '    module = importlib.util.module_from_spec(spec)\n    import sys\n    sys.modules[spec.name] = module\n    spec.loader.exec_module(module)'
+          if old not in text:
+              raise RuntimeError('base-module import patch anchor not found')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PYCODE
+          "$VENV_DIR/bin/python" -m py_compile research_backtests/two_day_adjustment_optimizer.py
+          sed -i 's/facts.measurement_date - INTERVAL ? DAY/facts.measurement_date - CAST(? AS INTEGER)/' \
+            research_backtests/green_k_top3_3m.py
+          sed -i 's/top3 = ranked\[ranked\["activity_rank"\] <= 3\]\.copy()/top3 = ranked.copy()/' \
+            research_backtests/green_k_top3_3m.py
+
+      - name: Run targeted walk-forward search
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf two_day_adjustment_optimization
+          "$VENV_DIR/bin/python" research_backtests/two_day_adjustment_optimizer.py \
+            --capital 1000000 \
+            --end-date 2026-08-21 \
+            --signal-configs 600 \
+            --top-signals 20 \
+            --seed 20260825 \
+            --cache-dir .cache/us_daily_picker/sec \
+            --kline-cache-dir .cache/us_intraday_picker/kline \
+            --output-dir two_day_adjustment_optimization \
+            | tee two_day_adjustment_optimization_run.log
+
+      - name: Verify outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$VENV_DIR/bin/python" - <<'PYCODE'
+          import json
+          from pathlib import Path
+          p = json.loads(Path('two_day_adjustment_optimization/result.json').read_text())
+          assert p['walk_forward_candidate']['periods']['recheck']['executed_batches'] >= 1
+          assert p['baselines']['big_drop_market_top3']['recheck']['executed_batches'] >= 1
+          print(json.dumps({
+              'walk_forward': p['walk_forward_candidate']['periods']['recheck'],
+              'big_drop': p['baselines']['big_drop_market_top3']['recheck'],
+              'green_pool': p['baselines']['green_pool_top3']['recheck'],
+          }, ensure_ascii=False, indent=2))
+          PYCODE
+
+      - name: Upload complete audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: two-day-adjustment-optimization-rerun
+          path: |
+            two_day_adjustment_optimization
+            two_day_adjustment_optimization_run.log
+          if-no-files-found: error
+          retention-days: 7
