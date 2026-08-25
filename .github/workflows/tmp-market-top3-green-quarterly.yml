@@ -1,0 +1,109 @@
+name: Temporary market-Top3 green-candle quarterly recheck
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/tmp-market-top3-green-quarterly.yml
+
+permissions:
+  contents: read
+
+jobs:
+  recheck:
+    strategy:
+      fail-fast: false
+      matrix:
+        end_date: [2025-11-18, 2026-02-19, 2026-05-20, 2026-08-21]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      VENV_DIR: .venv/us_intraday_picker
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Resolve cache keys
+        id: params
+        shell: bash
+        run: |
+          echo "week=$(TZ=Asia/Shanghai date +%G-%V)" >> "$GITHUB_OUTPUT"
+          echo "bjt_date=$(TZ=Asia/Shanghai date +%F)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: .venv/us_intraday_picker
+          key: us-intraday-venv-v1-${{ runner.os }}-py312-${{ hashFiles('us_daily_picker/requirements.txt') }}
+
+      - uses: actions/cache@v4
+        with:
+          path: .cache/us_daily_picker/sec
+          key: us-intraday-sec-compact-v1-${{ runner.os }}-${{ steps.params.outputs.week }}
+          restore-keys: |
+            us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
+
+      - uses: actions/cache@v4
+        with:
+          path: .cache/us_intraday_picker/kline
+          key: us-intraday-market-v2-${{ runner.os }}-${{ steps.params.outputs.bjt_date }}
+          restore-keys: |
+            us-intraday-market-v2-${{ runner.os }}-
+
+      - name: Prepare dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+            python -m venv "$VENV_DIR"
+            "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check \
+              -r us_daily_picker/requirements.txt
+          fi
+          "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check tabulate
+          sed -i 's/facts.measurement_date - INTERVAL ? DAY/facts.measurement_date - CAST(? AS INTEGER)/' \
+            research_backtests/green_k_top3_3m.py
+
+      - name: Run quarterly recheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          SAFE_DATE="${{ matrix.end_date }}"
+          OUT="market_top3_green_${SAFE_DATE}"
+          rm -rf "$OUT"
+          "$VENV_DIR/bin/python" research_backtests/green_k_top3_3m.py \
+            --capital 1000000 \
+            --end-date "$SAFE_DATE" \
+            --cache-dir .cache/us_daily_picker/sec \
+            --kline-cache-dir .cache/us_intraday_picker/kline \
+            --output-dir "$OUT" \
+            | tee "${OUT}_run.log"
+
+      - name: Verify
+        shell: bash
+        run: |
+          "$VENV_DIR/bin/python" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          end_date = os.environ['END_DATE']
+          p = json.loads(Path(f'market_top3_green_{end_date}/result.json').read_text())
+          item = next(x for x in p['summaries'] if x['mode']=='green_body' and x['exit_policy']=='bracket')
+          assert item['executed_batches'] >= 1
+          print(json.dumps(item, ensure_ascii=False, indent=2))
+          PY
+        env:
+          END_DATE: ${{ matrix.end_date }}
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-top3-green-${{ matrix.end_date }}
+          path: |
+            market_top3_green_${{ matrix.end_date }}
+            market_top3_green_${{ matrix.end_date }}_run.log
+          if-no-files-found: error
+          retention-days: 7
