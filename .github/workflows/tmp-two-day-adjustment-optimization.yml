@@ -1,0 +1,224 @@
+name: Temporary two-day adjustment optimization
+
+on:
+  push:
+    branches:
+      - tmp/two-day-adjustment-optimization-20260825
+    paths:
+      - .github/workflows/tmp-two-day-adjustment-optimization.yml
+
+permissions:
+  contents: read
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      VENV_DIR: .venv/us_intraday_picker
+      SCRIPT_B64: |
+          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
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Resolve cache keys
+        id: params
+        shell: bash
+        run: |
+          echo "week=$(TZ=Asia/Shanghai date +%G-%V)" >> "$GITHUB_OUTPUT"
+          echo "bjt_date=$(TZ=Asia/Shanghai date +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Python environment
+        uses: actions/cache@v4
+        with:
+          path: .venv/us_intraday_picker
+          key: us-intraday-venv-v1-${{ runner.os }}-py312-${{ hashFiles('us_daily_picker/requirements.txt') }}
+
+      - name: Restore compact SEC cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/us_daily_picker/sec
+          key: us-intraday-sec-compact-v1-${{ runner.os }}-${{ steps.params.outputs.week }}
+          restore-keys: |
+            us-daily-picker-sec-v3-${{ runner.os }}-${{ steps.params.outputs.week }}
+
+      - name: Restore market cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/us_intraday_picker/kline
+          key: us-intraday-market-v2-${{ runner.os }}-${{ steps.params.outputs.bjt_date }}
+          restore-keys: |
+            us-intraday-market-v2-${{ runner.os }}-
+
+      - name: Prepare dependencies and research script
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+            python -m venv "$VENV_DIR"
+            "$VENV_DIR/bin/python" -m pip install --disable-pip-version-check \
+              -r us_daily_picker/requirements.txt
+          fi
+          "$VENV_DIR/bin/python" - <<'PYCODE'
+          import base64, gzip, hashlib, os
+          from pathlib import Path
+          encoded = ''.join(os.environ['SCRIPT_B64'].split())
+          decoded = gzip.decompress(base64.b64decode(encoded, validate=True))
+          expected = '30d76ebf476f6585d4e9825af1689d8970af197a216d50202eb509b08daef983'
+          digest = hashlib.sha256(decoded).hexdigest()
+          assert digest == expected, (digest, expected)
+          path = Path('research_backtests/two_day_adjustment_optimizer.py')
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_bytes(decoded)
+          PYCODE
+          "$VENV_DIR/bin/python" -m py_compile research_backtests/two_day_adjustment_optimizer.py
+          sed -i 's/facts.measurement_date - INTERVAL ? DAY/facts.measurement_date - CAST(? AS INTEGER)/' \
+            research_backtests/green_k_top3_3m.py
+          sed -i 's/top3 = ranked\[ranked\["activity_rank"\] <= 3\]\.copy()/top3 = ranked.copy()/' \
+            research_backtests/green_k_top3_3m.py
+
+      - name: Run targeted walk-forward search
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf two_day_adjustment_optimization
+          "$VENV_DIR/bin/python" research_backtests/two_day_adjustment_optimizer.py \
+            --capital 1000000 \
+            --end-date 2026-08-21 \
+            --signal-configs 600 \
+            --top-signals 20 \
+            --seed 20260825 \
+            --cache-dir .cache/us_daily_picker/sec \
+            --kline-cache-dir .cache/us_intraday_picker/kline \
+            --output-dir two_day_adjustment_optimization \
+            | tee two_day_adjustment_optimization_run.log
+
+      - name: Verify outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$VENV_DIR/bin/python" - <<'PYCODE'
+          import json
+          from pathlib import Path
+          p = json.loads(Path('two_day_adjustment_optimization/result.json').read_text())
+          assert p['walk_forward_candidate']['periods']['recheck']['executed_batches'] >= 1
+          assert p['baselines']['big_drop_market_top3']['recheck']['executed_batches'] >= 1
+          print(json.dumps({
+              'walk_forward': p['walk_forward_candidate']['periods']['recheck'],
+              'big_drop': p['baselines']['big_drop_market_top3']['recheck'],
+              'green_pool': p['baselines']['green_pool_top3']['recheck'],
+          }, ensure_ascii=False, indent=2))
+          PYCODE
+
+      - name: Upload complete audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: two-day-adjustment-optimization
+          path: |
+            two_day_adjustment_optimization
+            two_day_adjustment_optimization_run.log
+          if-no-files-found: error
+          retention-days: 7
