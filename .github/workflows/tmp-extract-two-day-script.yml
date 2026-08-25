@@ -1,0 +1,37 @@
+name: Temporary extract two-day optimizer source
+
+on:
+  push:
+    branches:
+      - tmp/two-day-adjustment-optimization-20260825
+    paths:
+      - .github/workflows/tmp-extract-two-day-script.yml
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Decode source
+        shell: bash
+        run: |
+          python - <<'PYCODE'
+          import base64, gzip, re
+          from pathlib import Path
+          workflow = Path('.github/workflows/tmp-two-day-adjustment-optimization.yml').read_text(encoding='utf-8')
+          match = re.search(r'^      SCRIPT_B64: \|\n((?:          .*\n)+?)    steps:\n', workflow, flags=re.MULTILINE)
+          if not match:
+              raise RuntimeError('SCRIPT_B64 block not found')
+          encoded = ''.join(line.strip() for line in match.group(1).splitlines())
+          decoded = gzip.decompress(base64.b64decode(encoded, validate=True))
+          Path('two_day_adjustment_optimizer.py').write_bytes(decoded)
+          PYCODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: two-day-optimizer-source
+          path: two_day_adjustment_optimizer.py
+          if-no-files-found: error
+          retention-days: 2
